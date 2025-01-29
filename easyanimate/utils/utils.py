@@ -9,6 +9,17 @@ import torchvision
 from einops import rearrange
 from PIL import Image
 
+def add_noise_to_reference_video(image, ratio=None):
+    if ratio is None:
+        sigma = torch.normal(mean=-3.0, std=0.5, size=(image.shape[0],)).to(image.device)
+        sigma = torch.exp(sigma).to(image.dtype)
+    else:
+        sigma = torch.ones((image.shape[0],)).to(image.device, image.dtype) * ratio
+    
+    image_noise = torch.randn_like(image) * sigma[:, None, None, None, None]
+    image_noise = torch.where(image==-1, torch.zeros_like(image), image_noise)
+    image = image + image_noise
+    return image
 
 def get_width_and_height_from_image_and_base_resolution(image, base_resolution):
     target_pixels = int(base_resolution) * int(base_resolution)
@@ -168,15 +179,14 @@ def get_image_to_video_latent(validation_image_start, validation_image_end, vide
 
     return  input_video, input_video_mask, clip_image
 
-def get_video_to_video_latent(input_video_path, video_length, sample_size, fps=None, validation_video_mask=None, ref_image=None):
+def get_video_to_video_latent(input_video_path, video_length, sample_size, fps=None, validation_video_mask=None, ref_image=None, noise_aug_strength=0.0, strength=1.0):
     if input_video_path is not None:
         if isinstance(input_video_path, str):
             cap = cv2.VideoCapture(input_video_path)
             input_video = []
-
+            
             original_fps = cap.get(cv2.CAP_PROP_FPS)
             frame_skip = 1 if fps is None else int(original_fps // fps)
-
             frame_count = 0
 
             while True:
@@ -187,21 +197,31 @@ def get_video_to_video_latent(input_video_path, video_length, sample_size, fps=N
                 if frame_count % frame_skip == 0:
                     frame = cv2.resize(frame, (sample_size[1], sample_size[0]))
                     input_video.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-
                 frame_count += 1
 
             cap.release()
         else:
             input_video = input_video_path
 
+        # Convert to tensor first
         input_video = torch.from_numpy(np.array(input_video))[:video_length]
-        input_video = input_video.permute([3, 0, 1, 2]).unsqueeze(0) / 255
+        input_video = input_video.permute([3, 0, 1, 2]).unsqueeze(0).float() / 255
+        
+        # Add noise after conversion to tensor
+        if noise_aug_strength > 0:
+            device = input_video.device  # Get device from tensor
+            sigma = torch.ones((input_video.shape[0],), device=device) * noise_aug_strength
+            video_noise = torch.randn_like(input_video) * sigma[:, None, None, None, None]
+            input_video = input_video + video_noise
 
+        # Apply strength scaling
+        input_video = input_video * strength
+
+        # Rest of the existing processing
         if validation_video_mask is not None:
             validation_video_mask = Image.open(validation_video_mask).convert('L').resize((sample_size[1], sample_size[0]))
             input_video_mask = np.where(np.array(validation_video_mask) < 240, 0, 255)
-            
-            input_video_mask = torch.from_numpy(np.array(input_video_mask)).unsqueeze(0).unsqueeze(-1).permute([3, 0, 1, 2]).unsqueeze(0)
+            input_video_mask = torch.from_numpy(input_video_mask).unsqueeze(0).unsqueeze(-1).permute([3, 0, 1, 2]).unsqueeze(0)
             input_video_mask = torch.tile(input_video_mask, [1, 1, input_video.size()[2], 1, 1])
             input_video_mask = input_video_mask.to(input_video.device, input_video.dtype)
         else:
