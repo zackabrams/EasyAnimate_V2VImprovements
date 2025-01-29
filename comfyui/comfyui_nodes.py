@@ -835,6 +835,8 @@ class EasyAnimateV2VSampler:
                 "denoise_strength": (
                     "FLOAT", {"default": 0.70, "min": 0.05, "max": 1.00, "step": 0.01}
                 ),
+                "noise_aug_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "latent_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
                 "scheduler": (
                     [ 
                         "Euler",
@@ -859,7 +861,9 @@ class EasyAnimateV2VSampler:
     FUNCTION = "process"
     CATEGORY = "EasyAnimateWrapper"
 
-    def process(self, easyanimate_model, prompt, negative_prompt, video_length, base_resolution, seed, steps, cfg, denoise_strength, scheduler, validation_video=None, control_video=None, ref_image=None, camera_conditions=None, teacache_threshold=0.10, enable_teacache=False):
+    def process(self, easyanimate_model, prompt, negative_prompt, video_length, base_resolution, seed, steps, cfg, denoise_strength, scheduler, 
+                validation_video=None, control_video=None, camera_conditions=None, ref_image=None, 
+                teacache_threshold=0.10, enable_teacache=True, control_strength=1.0, noise_aug_strength=0.0):
         global transformer_cpu_cache
         global lora_path_before
 
@@ -915,7 +919,14 @@ class EasyAnimateV2VSampler:
             if model_type == "Inpaint":
                 input_video, input_video_mask, clip_image = get_video_to_video_latent(validation_video, video_length=video_length, sample_size=(height, width), fps=8)
             else:
-                input_video, input_video_mask, clip_image = get_video_to_video_latent(control_video, video_length=video_length, sample_size=(height, width), fps=8)
+                input_video, input_video_mask, clip_image = get_video_to_video_latent(
+                    control_video, 
+                    video_length=video_length,
+                    sample_size=(height, width),
+                    fps=8,
+                    noise_aug_strength=noise_aug_strength,
+                    strength=control_strength
+                )
                 if ref_image is not None:
                     ref_image = get_image_latent(sample_size=(height, width), ref_image=ref_image[0])
                 if camera_conditions is not None and len(camera_conditions) > 0: 
@@ -1048,6 +1059,8 @@ class EasyAnimateV5_V2VSampler(EasyAnimateV2VSampler):
                 ),
                 "teacache_threshold": ("FLOAT", {"default": 0.10, "min": 0.00, "max": 1.00, "step": 0.005}),
                 "enable_teacache":([False, True],  {"default": True,}),
+                "control_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
+                "noise_aug_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional":{
                 "validation_video": ("IMAGE",),
