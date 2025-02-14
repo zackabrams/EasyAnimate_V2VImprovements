@@ -853,6 +853,7 @@ class EasyAnimateV2VSampler:
             "optional":{
                 "validation_video": ("IMAGE",),
                 "control_video": ("IMAGE",),
+                "control_masks": ("IMAGE",),
                 "start_image": ("IMAGE",),
                 "end_image": ("IMAGE",),
             },
@@ -864,7 +865,7 @@ class EasyAnimateV2VSampler:
     CATEGORY = "EasyAnimateWrapper"
 
     def process(self, easyanimate_model, prompt, negative_prompt, video_length, base_resolution, seed, steps, cfg, denoise_strength, scheduler, 
-                validation_video=None, control_video=None, camera_conditions=None, ref_image=None, start_image=None, end_image=None, 
+                validation_video=None, control_video=None, control_masks=None, camera_conditions=None, ref_image=None, start_image=None, end_image=None, 
                 teacache_threshold=0.10, enable_teacache=True, control_strength=1.0, noise_aug_strength=0.0):
         global transformer_cpu_cache
         global lora_path_before
@@ -1006,6 +1007,7 @@ class EasyAnimateV2VSampler:
                     end_image = end_image,
                     control_camera_video = control_camera_video,
                     control_video = input_video,
+                    control_masks = control_masks,
                     comfyui_progressbar = True,
                 ).frames
             videos = rearrange(sample, "b c t h w -> (b t) h w c")
@@ -1074,6 +1076,7 @@ class EasyAnimateV5_V2VSampler(EasyAnimateV2VSampler):
             "optional":{
                 "validation_video": ("IMAGE",),
                 "control_video": ("IMAGE",),
+                "control_masks": ("IMAGE",),
                 "camera_conditions": ("STRING", {"forceInput": True}),
                 "ref_image": ("IMAGE",),
                 "start_image": ("IMAGE",),
