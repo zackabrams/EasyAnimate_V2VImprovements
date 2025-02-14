@@ -782,6 +782,7 @@ class EasyAnimateControlPipeline(DiffusionPipeline):
         height: Optional[int] = None,
         width: Optional[int] = None,
         control_video: Union[torch.FloatTensor] = None,
+        control_masks: Union[torch.FloatTensor] = None,
         control_camera_video: Union[torch.FloatTensor] = None,
         start_image: Union[torch.FloatTensor] = None,
         end_image: Union[torch.FloatTensor] = None,
@@ -1001,20 +1002,118 @@ class EasyAnimateControlPipeline(DiffusionPipeline):
             ).to(device, dtype)
         elif control_video is not None:
             video_length = control_video.shape[2]
-            control_video = self.image_processor.preprocess(rearrange(control_video, "b c f h w -> (b f) c h w"), height=height, width=width) 
+            control_video = self.image_processor.preprocess(
+                rearrange(control_video, "b c f h w -> (b f) c h w"), 
+                height=height, 
+                width=width
+            ) 
             control_video = control_video.to(dtype=torch.float32)
             control_video = rearrange(control_video, "(b f) c h w -> b c f h w", f=video_length)
-            control_video_latents = self.prepare_control_latents(
-                None,
-                control_video,
-                batch_size,
-                height,
-                width,
-                dtype,
-                device,
-                generator,
-                self.do_classifier_free_guidance
-            )[1]
+            
+            # Process control masks if provided
+            if control_masks is not None:
+                print(f"Control video shape: {control_video.shape}")
+                print(f"Original masks shape: {control_masks.shape}")
+                
+                # Reshape and reorder mask dimensions to match control video format
+                try:
+                    # First, move channels to correct position and add batch dimension
+                    # From [frame, height, width, channel] to [1, channel, frame, height, width]
+                    control_masks = control_masks.permute(3, 0, 1, 2)  # -> [channel, frame, height, width]
+                    control_masks = control_masks.unsqueeze(0)  # Add batch dimension
+                    
+                    print(f"Reshaped masks shape: {control_masks.shape}")
+                    
+                    # Verify dimensions match after reshaping
+                    if control_masks.shape != control_video.shape:
+                        raise ValueError(
+                            f"Dimension mismatch after reshaping:\n"
+                            f"Control video: {control_video.shape}\n"
+                            f"Control masks: {control_masks.shape}\n"
+                            "Shapes should match exactly."
+                        )
+                except Exception as e:
+                    print(f"Error during mask reshaping: {str(e)}")
+                    raise
+                
+                # Process masks - keeping values in 0-1 range without normalization
+                print("Processing control masks...")
+                # Masks are already properly shaped at this point from earlier permute/unsqueeze
+                # Just ensure proper dtype and device
+                control_masks = control_masks.to(dtype=torch.float32)
+                
+                # Clamp mask values to 0-1 range to ensure proper masking
+                control_masks = torch.clamp(control_masks, 0.0, 1.0)
+                print(f"Processed masks value range: [{control_masks.min():.2f}, {control_masks.max():.2f}]")
+                
+                # Add debug print before latent conversion
+                print("Converting control video and masks to latents...")
+                
+                # Convert control video and masks to latents
+                control_video_latents = self.prepare_control_latents(
+                    None,
+                    control_video,
+                    batch_size,
+                    height,
+                    width,
+                    dtype,
+                    device,
+                    generator,
+                    self.do_classifier_free_guidance
+                )[1]
+                
+                # Convert masks to latent space and match channel dimensions
+                try:
+                    print(f"Control video latents shape: {control_video_latents.shape}")
+                    print(f"Control masks pre-resize shape: {control_masks.shape}")
+                    
+                    # First convert to grayscale by averaging channels if not already grayscale
+                    if control_masks.shape[1] > 1:
+                        control_masks = control_masks.mean(dim=1, keepdim=True)
+                        print(f"Grayscale masks shape: {control_masks.shape}")
+                    
+                    # Resize to match spatial dimensions
+                    control_mask_latents = resize_mask(control_masks, control_video_latents)
+                    print(f"Resized masks shape: {control_mask_latents.shape}")
+                    
+                    # Expand channels to match latent channels
+                    num_latent_channels = control_video_latents.shape[1]
+                    control_mask_latents = control_mask_latents.repeat(1, num_latent_channels, 1, 1, 1)
+                    print(f"Channel-expanded masks shape: {control_mask_latents.shape}")
+                    
+                except Exception as e:
+                    print(f"Error during mask processing: {str(e)}")
+                    raise
+                
+                # Apply masks to control latents (1 = full control, 0 = no control)
+                try:
+                    # Verify shapes match before multiplication
+                    if control_video_latents.shape != control_mask_latents.shape:
+                        raise ValueError(
+                            f"Shape mismatch before masking:\n"
+                            f"Control latents: {control_video_latents.shape}\n"
+                            f"Control masks: {control_mask_latents.shape}"
+                        )
+                    
+                    control_video_latents = control_video_latents.to(device, dtype) * control_mask_latents.to(device, dtype)
+                    print(f"Final masked control latents shape: {control_video_latents.shape}")
+                except Exception as e:
+                    print(f"Error during mask application: {str(e)}")
+                    raise
+            else:
+                # Original control latent processing without masks
+                control_video_latents = self.prepare_control_latents(
+                    None,
+                    control_video,
+                    batch_size,
+                    height,
+                    width,
+                    dtype,
+                    device,
+                    generator,
+                    self.do_classifier_free_guidance
+                )[1]
+            
             control_latents = (
                 torch.cat([control_video_latents] * 2) if self.do_classifier_free_guidance else control_video_latents
             ).to(device, dtype)
@@ -1023,6 +1122,7 @@ class EasyAnimateControlPipeline(DiffusionPipeline):
             control_latents = (
                 torch.cat([control_video_latents] * 2) if self.do_classifier_free_guidance else control_video_latents
             ).to(device, dtype)
+
             
         if (start_image is not None) and (end_image is not None):
             video_length = start_image.shape[2]
